@@ -1,160 +1,143 @@
-import { useState, useEffect } from "react";
-import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
-import { format, isToday } from "date-fns";
+import React, { useState, useEffect } from "react";
 import "./App.css";
+import { auth, db } from "./firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import Login from "./Login";
+import TimeLogger from "./TimeLogger";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  orderBy
+} from "firebase/firestore";
+import { Pie } from "react-chartjs-2";
+import { Chart as ChartJS, ArcElement, Tooltip, Legend } from "chart.js";
 
-export default function App() {
+ChartJS.register(ArcElement, Tooltip, Legend);
+
+function App() {
   const [activity, setActivity] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
-  const [logs, setLogs] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [user, setUser] = useState(null);
 
-  // Load saved data from localStorage
+  await addDoc(collection(db, "users", user.uid, "activities"), {
+    activity,
+    startTime,
+    endTime,
+    totalMinutes,
+    createdAt: new Date()
+  });
+
+  // Load activities from Firestore
   useEffect(() => {
-    const saved = JSON.parse(localStorage.getItem("timeLogs")) || [];
-    const todayLogs = saved.filter(log => isToday(new Date(log.date)));
-    setLogs(todayLogs);
+    const fetchData = async () => {
+      const q = query(collection(db, "activities"), orderBy("startTime", "asc"));
+      const querySnapshot = await getDocs(q);
+      const data = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setActivities(data);
+    };
+    fetchData();
+  }, []);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
   }, []);
 
-  // Save logs to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem("timeLogs", JSON.stringify(logs));
-  }, [logs]);
+  return (
+    <div>
+      <Login user={user} />
+      {user ? <TimeLogger user={user} /> : <p>Please log in to continue.</p>}
+    </div>
+  );
+}
 
-  const addLog = () => {
+  const handleAddActivity = async () => {
     if (!activity || !startTime || !endTime) return;
 
-    const start = new Date(`1970-01-01T${startTime}:00`);
-    const end = new Date(`1970-01-01T${endTime}:00`);
-    const diff = (end - start) / (1000 * 60); // minutes
+    const totalMinutes =
+      (new Date(`1970-01-01T${endTime}:00`) -
+        new Date(`1970-01-01T${startTime}:00`)) /
+      (1000 * 60);
 
-    if (diff <= 0) {
-      alert("End time must be after start time");
-      return;
-    }
-
-    const newLog = {
+    const newActivity = {
       activity,
       startTime,
       endTime,
-      duration: diff,
-      date: new Date().toISOString()
+      totalMinutes
     };
 
-    setLogs([...logs, newLog]);
+    // Save to Firestore
+    const docRef = await addDoc(collection(db, "activities"), newActivity);
+
+    // Update local state
+    setActivities([...activities, { id: docRef.id, ...newActivity }]);
+
     setActivity("");
     setStartTime("");
     setEndTime("");
   };
 
-  const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#A569BD", "#E67E22"];
-
-  const chartData = logs.reduce((acc, log) => {
-    const existing = acc.find(a => a.name === log.activity);
-    if (existing) {
-      existing.value += log.duration;
-    } else {
-      acc.push({ name: log.activity, value: log.duration });
-    }
-    return acc;
-  }, []);
-  const exportToCSV = () => {
-    if (logs.length === 0) return;
-  
-    const headers = ["Activity", "Start Time", "End Time", "Duration (min)"];
-    const rows = logs.map(log => [
-      log.activity,
-      log.startTime,
-      log.endTime,
-      log.duration
-    ]);
-  
-    let csvContent =
-      "data:text/csv;charset=utf-8," +
-      [headers, ...rows].map(e => e.join(",")).join("\n");
-  
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `time_logs_${format(new Date(), "yyyy-MM-dd")}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const pieData = {
+    labels: activities.map(a => a.activity),
+    datasets: [
+      {
+        data: activities.map(a => a.totalMinutes),
+        backgroundColor: [
+          "#FF6384",
+          "#36A2EB",
+          "#FFCE56",
+          "#8A2BE2",
+          "#00FA9A"
+        ]
+      }
+    ]
   };
-  
+
   return (
-    <div className="app">
-      <h1>⏳ Daily Time Logger</h1>
-      <p>{format(new Date(), "PPP")}</p>
+    <div className="App">
+      <h1>Daily Time Logger</h1>
 
-      <div className="form">
-        <input
-          type="text"
-          placeholder="Activity name"
-          value={activity}
-          onChange={(e) => setActivity(e.target.value)}
-        />
-        <input
-          type="time"
-          value={startTime}
-          onChange={(e) => setStartTime(e.target.value)}
-        />
-        <input
-          type="time"
-          value={endTime}
-          onChange={(e) => setEndTime(e.target.value)}
-        />
-        <button onClick={addLog}>Add Activity</button>
-      </div>
+      <input
+        type="text"
+        placeholder="Activity"
+        value={activity}
+        onChange={(e) => setActivity(e.target.value)}
+      />
+      <input
+        type="time"
+        value={startTime}
+        onChange={(e) => setStartTime(e.target.value)}
+      />
+      <input
+        type="time"
+        value={endTime}
+        onChange={(e) => setEndTime(e.target.value)}
+      />
+      <button onClick={handleAddActivity}>Add Activity</button>
 
-      <h2>Today's Activities</h2>
-      <button onClick={exportToCSV} style={{ marginBottom: "10px" }}>
-     📄 Export to CSV
-      </button>
-      <table>
-        <thead>
-          <tr>
-            <th>Activity</th>
-            <th>Start</th>
-            <th>End</th>
-            <th>Duration (min)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {logs.map((log, i) => (
-            <tr key={i}>
-              <td>{log.activity}</td>
-              <td>{log.startTime}</td>
-              <td>{log.endTime}</td>
-              <td>{log.duration}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <ul>
+        {activities.map((a) => (
+          <li key={a.id}>
+            {a.activity} — {a.startTime} to {a.endTime} ({a.totalMinutes} mins)
+          </li>
+        ))}
+      </ul>
 
-      {logs.length > 0 && (
-        <>
-          <h2>Activity Breakdown</h2>
-          <PieChart width={400} height={300}>
-            <Pie
-              data={chartData}
-              cx={200}
-              cy={150}
-              labelLine={false}
-              outerRadius={100}
-              fill="#8884d8"
-              dataKey="value"
-              label
-            >
-              {chartData.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-              ))}
-            </Pie>
-            <Tooltip />
-            <Legend />
-          </PieChart>
-        </>
+      {activities.length > 0 && (
+        <div style={{ width: "400px", margin: "auto" }}>
+          <Pie data={pieData} />
+        </div>
       )}
     </div>
   );
 }
+
+export default App;
