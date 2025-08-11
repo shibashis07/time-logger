@@ -1,89 +1,139 @@
 import React, { useState, useEffect } from "react";
+import { PieChart, Pie, Cell, Tooltip, Legend } from "recharts";
 import { db } from "./firebase";
-import { collection, addDoc, getDocs } from "firebase/firestore";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  deleteDoc,
+  doc
+} from "firebase/firestore";
 import "./App.css";
+
+const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#A569BD", "#E74C3C"];
 
 function App() {
   const [activity, setActivity] = useState("");
-  const [log, setLog] = useState([]);
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [activities, setActivities] = useState([]);
+  const [today, setToday] = useState(new Date().toISOString().split("T")[0]);
 
-  // Load activities from Firestore
+  // Fetch today's logs on mount
   useEffect(() => {
-    const fetchActivities = async () => {
-      const querySnapshot = await getDocs(collection(db, "activities"));
-      const data = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setLog(data);
-    };
-
     fetchActivities();
-  }, []);
+  }, [today]);
 
-  // Add activity to Firestore
-  const handleAddActivity = async () => {
-    if (activity.trim() === "") return;
+  const fetchActivities = async () => {
+    const q = query(collection(db, "activities"), where("date", "==", today));
+    const querySnapshot = await getDocs(q);
+    const logs = [];
+    querySnapshot.forEach((doc) => {
+      logs.push({ id: doc.id, ...doc.data() });
+    });
+    setActivities(logs);
+  };
+
+  const addActivity = async () => {
+    if (!activity || !startTime || !endTime) {
+      alert("Please fill all fields");
+      return;
+    }
+
+    const start = new Date(`${today}T${startTime}`);
+    const end = new Date(`${today}T${endTime}`);
+    const duration = (end - start) / (1000 * 60); // minutes
+
+    if (duration <= 0) {
+      alert("End time must be after start time");
+      return;
+    }
 
     const newActivity = {
-      text: activity,
-      timestamp: new Date().toISOString()
+      activity,
+      startTime,
+      endTime,
+      duration,
+      date: today,
     };
 
     await addDoc(collection(db, "activities"), newActivity);
-    setLog([...log, newActivity]);
     setActivity("");
+    setStartTime("");
+    setEndTime("");
+    fetchActivities();
   };
 
-  // Export to CSV
-  const exportToCSV = () => {
-    const csvRows = [
-      ["Activity", "Timestamp"],
-      ...log.map(entry => [entry.text, entry.timestamp])
-    ];
-
-    const csvContent = csvRows
-      .map(row => row.map(item => `"${item}"`).join(","))
-      .join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.setAttribute("hidden", "");
-    a.setAttribute("href", url);
-    a.setAttribute("download", "activity_log.csv");
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const deleteActivity = async (id) => {
+    await deleteDoc(doc(db, "activities", id));
+    fetchActivities();
   };
+
+  const pieData = activities.map((a) => ({
+    name: a.activity,
+    value: a.duration,
+  }));
 
   return (
     <div className="App">
-      <h1>Activity Logger</h1>
-
-      <div className="input-section">
+      <h1>Time Logging App</h1>
+      <div className="form">
         <input
           type="text"
+          placeholder="Activity"
           value={activity}
-          placeholder="Enter activity"
           onChange={(e) => setActivity(e.target.value)}
         />
-        <button onClick={handleAddActivity}>Add</button>
+        <input
+          type="time"
+          value={startTime}
+          onChange={(e) => setStartTime(e.target.value)}
+        />
+        <input
+          type="time"
+          value={endTime}
+          onChange={(e) => setEndTime(e.target.value)}
+        />
+        <button onClick={addActivity}>Add Activity</button>
       </div>
 
-      <div className="log-section">
-        <h2>Log</h2>
-        <ul>
-          {log.map((entry, index) => (
-            <li key={entry.id || index}>
-              {entry.text} - {new Date(entry.timestamp).toLocaleString()}
-            </li>
-          ))}
-        </ul>
-      </div>
+      <h2>Today's Activities ({today})</h2>
+      <ul>
+        {activities.map((a) => (
+          <li key={a.id}>
+            {a.activity} — {a.startTime} to {a.endTime} ({a.duration} min)
+            <button onClick={() => deleteActivity(a.id)}>❌</button>
+          </li>
+        ))}
+      </ul>
 
-      <button onClick={exportToCSV}>Export to CSV</button>
+      {pieData.length > 0 && (
+        <>
+          <h2>Activity Breakdown</h2>
+          <PieChart width={400} height={400}>
+            <Pie
+              data={pieData}
+              cx="50%"
+              cy="50%"
+              outerRadius={120}
+              fill="#8884d8"
+              dataKey="value"
+              label
+            >
+              {pieData.map((_, index) => (
+                <Cell
+                  key={`cell-${index}`}
+                  fill={COLORS[index % COLORS.length]}
+                />
+              ))}
+            </Pie>
+            <Tooltip />
+            <Legend />
+          </PieChart>
+        </>
+      )}
     </div>
   );
 }
